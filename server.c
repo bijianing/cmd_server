@@ -81,9 +81,12 @@ int readc(int sock, char *c)
 		p = 0;
 		sz = read(sock, buf, sizeof(buf));
 		usleep(WAIT_AFTER_READ);
-		if (sz <= 0) {
-			ErrPrint("read failed:%s\n", strerror(errno));
+		if (sz == 0 && errno == 0) {
+			InfPrint("remote peer exited\n");
 			return -1;
+		} else if (sz <= 0) {
+			ErrPrint("read failed:%s\n", strerror(errno));
+			return -2;
 		}
 		buf[sz] = 0;
 		DbgPrint("read:%s\n", buf);
@@ -145,14 +148,56 @@ start_read:
 
 int cmd_notepad(char *result, int size)
 {
+	system("/mnt/c/Windows/System32/notepad.exe &");
 
 	sprintf(result, "execute succed");
 	return 0;
 }
 
+int cmd_update(char *result, int size)
+{
+
+	system("/mnt/d/bjn/update.exe &");
+
+	sprintf(result, "execute succed");
+	return 0;
+}
+
+int cmd_restart(char *result, int size)
+{
+
+	system("/mnt/d/bjn/restart_all_vm.exe &");
+
+	sprintf(result, "execute succed");
+	return 0;
+}
+
+int cmd_reboot(char *result, int size)
+{
+
+	system("/mnt/c/Windows/System32/shutdown.exe -f -r -t 0");
+	//system("sudo reboot");
+
+	sprintf(result, "execute succed");
+	return 0;
+}
+
+int cmd_shutdown(char *result, int size)
+{
+
+	system("/mnt/c/Windows/System32/shutdown.exe -s -t 0");
+
+	sprintf(result, "execute succed");
+	return 0;
+}
+
+
 int cmd_test(char *result, int size)
 {
 
+	system("/mnt/d/bjn/mouse_test.exe &");
+
+	sprintf(result, "execute succed");
 	return 0;
 }
 
@@ -160,7 +205,11 @@ int cmd_test(char *result, int size)
 struct cmd_info cmd_table[] = 
 {
 	{ cmd_notepad,	"notepad" },
-	{ cmd_test,		"test" },
+	{ cmd_test,	"test" },
+	{ cmd_update,	"update" },
+	{ cmd_restart,	"restart" },
+	{ cmd_reboot,	"reboot" },
+	{ cmd_shutdown,	"shutdown" },
 };
 
 int execute_cmd(const char *cmd, char *result, int size)
