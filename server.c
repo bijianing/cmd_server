@@ -47,7 +47,7 @@
 
 
 
-#define ARYSIZ(ary)     			(sizeof(ary) / sizeof(ary[0]))
+#define ARYSIZ(ary)					(sizeof(ary) / sizeof(ary[0]))
 #define CMD_START					'('
 #define CMD_END						')'
 #define CMD_MAX_LEN					16
@@ -57,7 +57,7 @@
 #define BUFSZ						1024
 
 /* ==================================================================== */
-/* STRUCTS                                                            */
+/* STRUCTS															  */
 /* ==================================================================== */
 
 struct cmd_info
@@ -68,7 +68,7 @@ struct cmd_info
 
 
 /* ==================================================================== */
-/* FUNCTIONS                                                            */
+/* FUNCTIONS															*/
 /* ==================================================================== */
 
 int readc(int sock, char *c)
@@ -227,50 +227,66 @@ int execute_cmd(const char *cmd, char *result, int size)
 	return ret;
 }
 
-int main(int argc, const char* argv[])
+int wait_connect(int fd)
 {
-	int sock0;
+	int ret = 0;
+	fd_set	rfds;			// 接続待ち、受信待ちをするディスクリプタの集合
+	struct timeval	tv;		// タイムアウト時間
+
+	FD_ZERO( &rfds );
+	FD_SET( fd, &rfds );
+	tv.tv_sec = 10;
+	tv.tv_usec = 0;
+
+	if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) {
+		ret = -1;
+	}
+
+	return ret;
+}
+
+int start_server(unsigned short port)
+{
+	int fd, ret, len, sock;
 	struct sockaddr_in addr;
 	struct sockaddr_in client;
-	int len;
-	int sock;
-	int port = 12345;
 	char cmd[BUFSZ];
 	char result[BUFSZ];
 
-	if (argc > 2) {
-		printf("Usage: %s [port]\n", argv[0]);
-		exit(1);
-	}
-
-	if (argc == 2) {
-		port = atoi(argv[1]);
-		if (port <= 0 || port > 99999) {
-			ErrPrint("port range: 1 - 9999\n");
-			exit(2);
-		}
-	}
-
 	InfPrint("Using port %d\n", port);
 	/* ソケットの作成 */
-	sock0 = socket(AF_INET, SOCK_STREAM, 0);
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		ErrPrint("socket failed:%s, ret:%d\n", strerror(errno), fd);
+		goto end;
+	}
 
 	/* ソケットの設定 */
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	addr.sin_addr.s_addr = INADDR_ANY;
-	bind(sock0, (struct sockaddr *)&addr, sizeof(addr));
+	ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+	if (ret < 0) {
+		ErrPrint("bind failed:%s, ret:%d\n", strerror(errno), ret);
+		goto end;
+	}
 
 	/* TCPクライアントからの接続要求を待てる状態にする */
-	listen(sock0, 5);
+	ret = listen(fd, 15);
+	if (ret < 0) {
+		ErrPrint("listen failed:%s, ret:%d\n", strerror(errno), ret);
+		goto end;
+	}
 
 	while (1)
 	{
-		int end_flg = 0;
-		int ret;
 		/* TCPクライアントからの接続要求を受け付ける */
+		if (wait_connect(fd) < 0) {
+			DbgPrint("wait connect timeout\n");
+			goto end;
+		}
 		len = sizeof(client);
-		sock = accept(sock0, (struct sockaddr *)&client, &len);
+		sock = accept(fd, (struct sockaddr *)&client, &len);
 
 		while (wait_cmd(sock, cmd, sizeof(cmd)) == 0)
 		{
@@ -287,8 +303,34 @@ int main(int argc, const char* argv[])
 		close(sock);
 	}
 
+end:
 	/* listen するsocketの終了 */
-	close(sock0);
+	close(fd);
+
+	return 0;
+}
+
+int main(int argc, const char* argv[])
+{
+	unsigned short port = 12345;
+
+	if (argc > 2) {
+		printf("Usage: %s [port]\n", argv[0]);
+		exit(1);
+	}
+
+	if (argc == 2) {
+		port = atoi(argv[1]);
+		if (port <= 0 || port > 99999) {
+			ErrPrint("port range: 1 - 9999\n");
+			exit(2);
+		}
+	}
+
+	while (1)
+	{
+		start_server(port);
+	}
 
 	return 0;
 }
