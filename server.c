@@ -59,7 +59,7 @@
 #define CMD_START					'('
 #define CMD_END						')'
 #define CMD_MAX_LEN					16
-#define CONN_TIMEOUT				10
+#define CONN_TIMEOUT				(60 * 10)
 #define WAIT_AFTER_READ				(500 * 1000)
 #define CMD_RET_NOT_FOUND			-9999
 #define CMD_RET_HTTP_OK				10
@@ -156,7 +156,6 @@ static const char *httpd_get_header_date(void)
 		 "Dec"
 	};
 
-PosPrint
 	tm = time(NULL);
 	date = localtime(&tm);
 
@@ -170,7 +169,6 @@ PosPrint
 			date->tm_mday,
 			mon_name[date->tm_mon],
 			date->tm_year, date->tm_hour, date->tm_min, date->tm_sec);
-PosPrint
 
 	return buf;;
 }
@@ -425,6 +423,7 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 		ErrPrint("File %s Not found\n", IMG_FILE_PATH);
 		return -1;
 	}
+	usleep(1000000);
 
 	if ((st.st_mode & S_IFMT) != S_IFREG) {
 		ErrPrint("File %s is not a file\n", IMG_FILE_PATH);
@@ -444,7 +443,9 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 	}
 
 	while ((n = read(fd, buf, BUFSZ)) > 0) {
+		DbgPrint("read %d bytes from fd:%d, write to fd:%d\n", n, fd, sock);
 		ret = write(sock, buf, n);
+		DbgPrint("write return: %d\n", ret);
 		if (ret != n) {
 			ErrPrint("write data failed, n:%d, ret:%d\n", n, ret);
 			return -5;
@@ -600,11 +601,13 @@ int start_server(unsigned short port)
 
 		write(sock, CMD_END_STR, strlen(CMD_END_STR));
 		/* TCPセッションの終了 */
+		DbgPrint("close socket\n");
 		close(sock);
 	}
 
 end:
 	/* listen するsocketの終了 */
+	DbgPrint("close fd\n");
 	close(fd);
 
 	return 0;
