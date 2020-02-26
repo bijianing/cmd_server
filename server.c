@@ -4,14 +4,19 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <stdlib.h>
+#include <time.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+
 
 #define __DEBUGLOG_ERROR				1
 #define __DEBUGLOG_INFO					1
-#define __DEBUGLOG_DEBUG				0
-#define __DEBUGLOG_FUNC					0
-#define __DEBUGLOG_POS					0
+#define __DEBUGLOG_DEBUG				1
+#define __DEBUGLOG_FUNC					1
+#define __DEBUGLOG_POS					1
 
 #define MOD_NAME						"CmdSrv"
 #if __DEBUGLOG_ERROR
@@ -47,24 +52,47 @@
 
 
 
+/* ==================================================================== */
+/* DEFINE																*/
+/* ==================================================================== */
 #define ARYSIZ(ary)					(sizeof(ary) / sizeof(ary[0]))
 #define CMD_START					'('
 #define CMD_END						')'
 #define CMD_MAX_LEN					16
+#define CONN_TIMEOUT				10
 #define WAIT_AFTER_READ				(500 * 1000)
-#define CMD_NOT_FOUND_RET			-9999
+#define CMD_RET_NOT_FOUND			-9999
+#define CMD_RET_HTTP_OK				10
+#define CMD_RET_STR_OK				"Execute succeeded!\n"
+#define CMD_RET_STR_NOT_FOUND		"Not found!\n"
+#define CMD_RET_STR_UNKNOW			"Unknow!\n"
+#define CMD_END_STR					"End\n"
 
-#define BUFSZ						1024
+#define BUFSZ						4096
+
+/* ==================================================================== */
+/* ENUMS																*/
+/* ==================================================================== */
+typedef enum {
+	eCMD_RES_OK,
+	eCMD_RES_HTTP_OK,
+	eCMD_RES_NOT_FOUND,
+} CmdRet_t;
+
+/* ==================================================================== */
+/* VARIABLES															*/
+/* ==================================================================== */
+static int g_http_mode = 0;
 
 /* ==================================================================== */
 /* STRUCTS															  */
 /* ==================================================================== */
 
-struct cmd_info
+typedef struct cmd_info
 {
-	int (*fun)(char *result, int size);
+	int (*fun)(struct cmd_info *info, int sock);
 	const char *cmd;
-};
+} CmdInfo_t;
 
 
 /* ==================================================================== */
@@ -89,11 +117,119 @@ int readc(int sock, char *c)
 			return -2;
 		}
 		buf[sz] = 0;
-		DbgPrint("read:%s\n", buf);
+//		DbgPrint("read:%s\n", buf);
 	}
 
 	*c = buf[p++];
-	DbgPrint("readc internal:%c\n", *c);
+//	DbgPrint("readc internal:%c\n", *c);
+
+	return 0;
+}
+
+static const char *httpd_get_header_date(void)
+{
+	int n;
+	time_t tm;
+	struct tm *date;
+	static char buf[BUFSZ];
+	const char *day_name[] = {
+		"Sun",
+		"Mon",
+		"Tue",
+		"Wed",
+		"Thu",
+		"Fri",
+		"Sat"
+	};
+	const char *mon_name[] = {
+		"Jan",
+		"Feb",
+		"Mar",
+		"Apr",
+		"May",
+		"Jun",
+		"Jul",
+		"Aug",
+		"Sep",
+		 "Oct",
+		 "Nov",
+		 "Dec"
+	};
+
+PosPrint
+	tm = time(NULL);
+	date = localtime(&tm);
+
+	if (!date) {
+		ErrPrint("localtime() failed\n");
+		return "";
+	}
+	DbgPrint("day:%d, mon:%d\n", date->tm_wday, date->tm_mon);
+	n = sprintf(buf, "%s, %02d %s %04d %02d:%02d:%02d GMT",
+			day_name[date->tm_wday],
+			date->tm_mday,
+			mon_name[date->tm_mon],
+			date->tm_year, date->tm_hour, date->tm_min, date->tm_sec);
+PosPrint
+
+	return buf;;
+}
+
+int wait_cmd_http(int sock, char *cmd, int sz)
+{
+	int i;
+	char key[4] = { 0 };
+	char c;
+	char *pcmd;
+
+	FunPrint("Start\n");
+	strcpy(cmd, "http_");
+	pcmd = cmd + strlen(cmd);
+
+start_read:
+	/* find GET */
+	while (1) {
+		if (readc(sock, &key[2]) < 0) {
+			return -1;
+		}
+
+		if (strncmp(key, "GET", 3) == 0) break;
+		key[0] = key[1];
+		key[1] = key[2];
+	}
+
+	DbgPrint("########################################## Got GET\n");
+	/* find / */
+	while (1) {
+		if (readc(sock, &c) < 0) {
+			return -2;
+		}
+
+		if (c == '/') break;
+		if (c != ' ') goto start_read;
+	}
+
+	/* get command */
+	for (i = 0; i < CMD_MAX_LEN; i++) {
+		if (readc(sock, &c) < 0) {
+			return -3;
+		}
+
+		DbgPrint("get cmd c:%c\n", c);
+		if (c == ' ') break;
+		if (c == '\n' || c == '\r') goto start_read;
+		pcmd[i] = c;
+	}
+
+	if (i == 0) {
+		ErrPrint("command len = 0\n");
+		return -4;
+	} else if (i >= CMD_MAX_LEN) {
+		ErrPrint("command len = %d too long\n", CMD_MAX_LEN);
+		return -5;
+	}
+	pcmd[i] = 0;
+	DbgPrint("cmd len:%d, cmd:%s, pcmd:%s\n", i, cmd, pcmd);
 
 	return 0;
 }
@@ -103,9 +239,14 @@ int wait_cmd(int sock, char *cmd, int sz)
 	char c;
 	int i;
 
+	FunPrint("Start\n");
 	if (sz <= CMD_MAX_LEN) {
 		ErrPrint("command buffer too small\n");
 		return -5;
+	}
+
+	if (g_http_mode) {
+		return wait_cmd_http(sock, cmd, sz);
 	}
 
 start_read:
@@ -115,7 +256,7 @@ start_read:
 			return -1;
 		}
 
-		DbgPrint("readc1:%c\n", c);
+//		DbgPrint("readc1:%c\n", c);
 		if (c == CMD_START) break;
 	}
 
@@ -125,7 +266,7 @@ start_read:
 			return -2;
 		}
 
-		DbgPrint("readc2:%c\n", c);
+//		DbgPrint("readc2:%c\n", c);
 		if (c == CMD_END) break;
 		if (c == '\n' || c == '\r') goto start_read;
 
@@ -146,80 +287,219 @@ start_read:
 	return 0;
 }
 
-int cmd_notepad(char *result, int size)
+int write_cmd_result(int sock, const char *cmd, CmdRet_t ret)
 {
-	system("/mnt/c/Windows/System32/notepad.exe &");
+	const char *str;
+	char buf[BUFSZ];
+	int n;
 
-	sprintf(result, "execute succed");
+	switch (ret)
+	{
+		case eCMD_RES_OK:
+			str = CMD_RET_STR_OK;
+			break;
+		case eCMD_RES_NOT_FOUND:
+			str = CMD_RET_STR_NOT_FOUND;
+			break;
+		case eCMD_RES_HTTP_OK:
+			/* HTTP response, dont write anything */
+			return 0;
+		default:
+			str = CMD_RET_STR_UNKNOW;
+			break;
+	}
+
+	n = snprintf(buf, BUFSZ, "Command:%s : %s\n", cmd, str);
+	ret = write(sock, buf, n);
+
+	if (ret != n) {
+		return -1;
+	}
+
 	return 0;
 }
 
-int cmd_update(char *result, int size)
+int cmd_notepad(CmdInfo_t *info, int sock)
+{
+	system("/mnt/c/Windows/System32/notepad.exe &");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_update(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/d/bjn/update.exe &");
 
-	sprintf(result, "execute succed");
-	return 0;
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
-int cmd_restart(char *result, int size)
+int cmd_restart(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/d/bjn/restart_all_vm.exe &");
 
-	sprintf(result, "execute succed");
-	return 0;
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
-int cmd_reboot(char *result, int size)
+int cmd_reboot(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/c/Windows/System32/shutdown.exe -f -r -t 0");
 	//system("sudo reboot");
 
-	sprintf(result, "execute succed");
-	return 0;
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
-int cmd_shutdown(char *result, int size)
+int cmd_shutdown(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/c/Windows/System32/shutdown.exe -s -t 0");
 
-	sprintf(result, "execute succed");
-	return 0;
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
 
-int cmd_test(char *result, int size)
+int cmd_test(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/d/bjn/mouse_test.exe &");
 
-	sprintf(result, "execute succed");
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_enableHttp(CmdInfo_t *info, int sock)
+{
+
+	g_http_mode = 1;
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int http_write_header(int sock, const char *type, long content_length)
+{
+	int n, ret;
+	char buf[BUFSZ];
+
+	n = snprintf(buf, BUFSZ, "HTTP/1.1 200 OK\r\n"
+			"Date: %s\r\n"
+			"Content-Type: %s\r\n"
+			"Content-Length: %ld\r\n"
+			"Connection: close\r\n\r\n",
+			httpd_get_header_date(),
+			type,
+			content_length);
+	DbgPrint("n:%d, buf:%s\n", n, buf);
+	ret = write(sock, buf, n);
+	if (ret != n) {
+		ErrPrint("write failed, n:%d ret:%d\n", n, ret);
+		return -1;
+	}
+
+	return n;
+}
+
+
+#define IMG_FILE_PATH			"screenshot.png"
+#define IMG_FILE_WAIT_TIME		5000
+int cmd_http_screenshot(CmdInfo_t *info, int sock)
+{
+	struct stat st;
+	int n, ret, fd, tmo;
+	char buf[BUFSZ];
+
+	remove(IMG_FILE_PATH);
+	system("./tools/nircmd/nircmd.exe savescreenshot " IMG_FILE_PATH);
+
+	tmo = IMG_FILE_WAIT_TIME;
+	while (tmo > 0) {
+		if (stat(IMG_FILE_PATH, &st) == 0) {
+			break;
+		}
+
+		/* sleep 1ms */
+		tmo--;
+		usleep(1000);
+	}
+	if (tmo <= 0) {
+		ErrPrint("File %s Not found\n", IMG_FILE_PATH);
+		return -1;
+	}
+
+	if ((st.st_mode & S_IFMT) != S_IFREG) {
+		ErrPrint("File %s is not a file\n", IMG_FILE_PATH);
+		return -2;
+	}
+
+	ret = http_write_header(sock, "image/png", st.st_size);
+	if (ret <= 0) {
+		ErrPrint("write header failed, ret:%d\n", ret);
+		return -3;
+	}
+
+	fd = open(IMG_FILE_PATH, O_RDONLY);
+	if (fd < 0) {
+		ErrPrint("open() failed: %s\n", strerror(errno));
+		return -4;
+	}
+
+	while ((n = read(fd, buf, BUFSZ)) > 0) {
+		ret = write(sock, buf, n);
+		if (ret != n) {
+			ErrPrint("write data failed, n:%d, ret:%d\n", n, ret);
+			return -5;
+		}
+	}
+
+	return 0;
+}
+
+int cmd_http_disable(CmdInfo_t *info, int sock)
+{
+	struct stat st;
+	int n, ret, fd;
+	char buf[BUFSZ];
+
+	n = snprintf(buf, BUFSZ, "HTTP disabled");
+	ret = http_write_header(sock, "text/plain", n);
+	if (ret != n) {
+		ErrPrint("write header failed, n:%d, ret:%d\n", n, ret);
+		return -1;
+	}
+
+	ret = write(sock, buf, n);
+	if (ret != n) {
+		ErrPrint("write data failed, n:%d, ret:%d\n", n, ret);
+		return -2;
+	}
+
+	g_http_mode = 0;
 	return 0;
 }
 
 
+
 struct cmd_info cmd_table[] = 
 {
-	{ cmd_notepad,	"notepad" },
-	{ cmd_test,	"test" },
-	{ cmd_update,	"update" },
-	{ cmd_restart,	"restart" },
-	{ cmd_reboot,	"reboot" },
-	{ cmd_shutdown,	"shutdown" },
+	{ cmd_notepad,			"notepad" },
+	{ cmd_test,				"test" },
+	{ cmd_update,			"update" },
+	{ cmd_restart,			"restart" },
+	{ cmd_reboot,			"reboot" },
+	{ cmd_shutdown,			"shutdown" },
+	{ cmd_enableHttp,		"enableHttp" },
+	{ cmd_http_screenshot,	"http_screenshot" },
+	{ cmd_http_disable,		"http_disable" },
 };
 
-int execute_cmd(const char *cmd, char *result, int size)
+int execute_cmd(const char *cmd, int sock)
 {
 	int i;
-	int ret = CMD_NOT_FOUND_RET;
+	int ret = CMD_RET_NOT_FOUND;
 
 	for (i = 0; i < ARYSIZ(cmd_table); i++) {
 		if (0 == strncmp(cmd, cmd_table[i].cmd, strlen(cmd_table[i].cmd))) {
-			ret = cmd_table[i].fun(result, size);
+			ret = cmd_table[i].fun(&cmd_table[i], sock);
 			break;
 		}
 	}
@@ -229,35 +509,54 @@ int execute_cmd(const char *cmd, char *result, int size)
 
 int wait_connect(int fd)
 {
-	int ret = 0;
+	int len, ret = 0;
 	fd_set	rfds;			// 接続待ち、受信待ちをするディスクリプタの集合
 	struct timeval	tv;		// タイムアウト時間
+	struct sockaddr_in client;
+	char ip_str[INET_ADDRSTRLEN];
 
 	FD_ZERO( &rfds );
 	FD_SET( fd, &rfds );
-	tv.tv_sec = 10;
+	tv.tv_sec = CONN_TIMEOUT;
 	tv.tv_usec = 0;
 
-	if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) {
-		ret = -1;
+	if ((ret = select(fd + 1, &rfds, NULL, NULL, &tv)) <= 0) {
+		DbgPrint("select timeout, ret:%d\n", ret);
+		return -1;
 	}
+
+	InfPrint("Connected!\n");
+	len = sizeof(client);
+	ret = accept(fd, (struct sockaddr *)&client, &len);
+	InfPrint("Accepted!\n");
+	if (inet_ntop(AF_INET, &client.sin_addr, ip_str, INET_ADDRSTRLEN) == NULL) {
+		ErrPrint("Unknow remote IP address\n");
+		return -2;
+	}
+	InfPrint("remote IP:%s Port:%d\n", ip_str, ntohs(client.sin_port));
 
 	return ret;
 }
 
 int start_server(unsigned short port)
 {
-	int fd, ret, len, sock;
+	int fd, ret, sock;
 	struct sockaddr_in addr;
-	struct sockaddr_in client;
 	char cmd[BUFSZ];
 	char result[BUFSZ];
+	int yes = 1;
 
 	InfPrint("Using port %d\n", port);
 	/* ソケットの作成 */
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
 		ErrPrint("socket failed:%s, ret:%d\n", strerror(errno), fd);
+		goto end;
+	}
+
+	ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
+	if (ret < 0) {
+		ErrPrint("setsockopt failed:%s, ret:%d\n", strerror(errno), ret);
 		goto end;
 	}
 
@@ -281,24 +580,25 @@ int start_server(unsigned short port)
 	while (1)
 	{
 		/* TCPクライアントからの接続要求を受け付ける */
-		if (wait_connect(fd) < 0) {
+		if ((sock = wait_connect(fd)) < 0) {
 			DbgPrint("wait connect timeout\n");
 			goto end;
 		}
-		len = sizeof(client);
-		sock = accept(fd, (struct sockaddr *)&client, &len);
 
 		while (wait_cmd(sock, cmd, sizeof(cmd)) == 0)
 		{
-			memset(result, 0, sizeof(result));
-			ret = execute_cmd(cmd, result, sizeof(result));
-			if (ret == CMD_NOT_FOUND_RET) {
+			ret = execute_cmd(cmd, sock);
+			if (ret == CMD_RET_NOT_FOUND) {
 				sprintf(result, "Command \"%s\" Not Found", cmd);
+				write(sock, result, strlen(result));
+			} else if (ret == CMD_RET_HTTP_OK) {
+				DbgPrint("result:%s\n", result);
 			}
 			InfPrint("execute cmd:%s, return:%d\n", cmd, ret);
-			write(sock, result, strlen(result));
+			break;
 		}
 
+		write(sock, CMD_END_STR, strlen(CMD_END_STR));
 		/* TCPセッションの終了 */
 		close(sock);
 	}
