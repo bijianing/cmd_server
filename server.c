@@ -10,6 +10,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 
 #define __DEBUGLOG_ERROR				1
@@ -82,7 +83,7 @@ typedef enum {
 /* ==================================================================== */
 /* VARIABLES															*/
 /* ==================================================================== */
-static int g_http_mode = 0;
+static int g_http_mode = 1;
 
 /* ==================================================================== */
 /* STRUCTS															  */
@@ -610,6 +611,14 @@ end:
 	return 0;
 }
 
+void sig_handler(int sig, siginfo_t *info, void *ctx)
+{
+
+	ErrPrint("got signal SIGPIPE\n");
+
+}
+
+
 int main(int argc, const char* argv[])
 {
 	unsigned short port = 12345;
@@ -625,6 +634,16 @@ int main(int argc, const char* argv[])
 			ErrPrint("port range: 1 - 9999\n");
 			exit(2);
 		}
+	}
+
+	struct sigaction sa_sigpipe;
+	memset(&sa_sigpipe, 0, sizeof(sa_sigpipe));
+	sa_sigpipe.sa_sigaction = sig_handler;
+	sa_sigpipe.sa_flags = SA_SIGINFO;
+
+	if ( sigaction(SIGPIPE, &sa_sigpipe, NULL) < 0 ) {
+		ErrPrint("signal SIGPIPE handler register failed\n");
+		exit(3);
 	}
 
 	while (1)
