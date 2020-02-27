@@ -15,9 +15,9 @@
 
 #define __DEBUGLOG_ERROR				1
 #define __DEBUGLOG_INFO					1
-#define __DEBUGLOG_DEBUG				1
-#define __DEBUGLOG_FUNC					1
-#define __DEBUGLOG_POS					1
+#define __DEBUGLOG_DEBUG				0
+#define __DEBUGLOG_FUNC					0
+#define __DEBUGLOG_POS					0
 
 #define MOD_NAME						"CmdSrv"
 #if __DEBUGLOG_ERROR
@@ -404,7 +404,7 @@ int http_write_header(int sock, const char *type, long content_length)
 int cmd_http_screenshot(CmdInfo_t *info, int sock)
 {
 	struct stat st;
-	int n, ret, fd, tmo;
+	int n, ret, fd, tmo, wrote;
 	char buf[BUFSZ];
 
 	remove(IMG_FILE_PATH);
@@ -424,7 +424,7 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 		ErrPrint("File %s Not found\n", IMG_FILE_PATH);
 		return -1;
 	}
-	usleep(1000000);
+	//usleep(1000000);
 
 	if ((st.st_mode & S_IFMT) != S_IFREG) {
 		ErrPrint("File %s is not a file\n", IMG_FILE_PATH);
@@ -443,10 +443,12 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 		return -4;
 	}
 
+	wrote = 0;
 	while ((n = read(fd, buf, BUFSZ)) > 0) {
-		DbgPrint("read %d bytes from fd:%d, write to fd:%d\n", n, fd, sock);
+		DbgPrint("write :%d bytes to fd:%d\n", n, fd);
 		ret = write(sock, buf, n);
-		DbgPrint("write return: %d\n", ret);
+		wrote += n;
+		DbgPrint("total:%ld, wrote:%d read %d bytes from fd:%d, write to fd:%d\n", st.st_size, wrote, n, fd, sock);
 		if (ret != n) {
 			ErrPrint("write data failed, n:%d, ret:%d\n", n, ret);
 			return -5;
@@ -464,7 +466,7 @@ int cmd_http_disable(CmdInfo_t *info, int sock)
 
 	n = snprintf(buf, BUFSZ, "HTTP disabled");
 	ret = http_write_header(sock, "text/plain", n);
-	if (ret != n) {
+	if (ret < 0) {
 		ErrPrint("write header failed, n:%d, ret:%d\n", n, ret);
 		return -1;
 	}
@@ -492,6 +494,10 @@ struct cmd_info cmd_table[] =
 	{ cmd_enableHttp,		"enableHttp" },
 	{ cmd_http_screenshot,	"http_screenshot" },
 	{ cmd_http_disable,		"http_disable" },
+	{ cmd_update,			"http_update" },
+	{ cmd_restart,			"http_restart" },
+	{ cmd_reboot,			"http_reboot" },
+	{ cmd_shutdown,			"http_shutdown" },
 };
 
 int execute_cmd(const char *cmd, int sock)
