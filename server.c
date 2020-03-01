@@ -15,8 +15,8 @@
 
 #define __DEBUGLOG_ERROR				1
 #define __DEBUGLOG_INFO					1
-#define __DEBUGLOG_DEBUG				0
-#define __DEBUGLOG_FUNC					0
+#define __DEBUGLOG_DEBUG				1
+#define __DEBUGLOG_FUNC					1
 #define __DEBUGLOG_POS					0
 
 #define MOD_NAME						"CmdSrv"
@@ -57,9 +57,10 @@
 /* DEFINE																*/
 /* ==================================================================== */
 #define ARYSIZ(ary)					(sizeof(ary) / sizeof(ary[0]))
-#define CMD_START					'('
-#define CMD_END						')'
+#define CMD_START					'.'
+#define CMD_END						'.'
 #define CMD_MAX_LEN					16
+#define PATH_MAX_LEN				512
 #define CONN_TIMEOUT				(60 * 10)
 #define WAIT_AFTER_READ				(500 * 1000)
 #define CMD_RET_NOT_FOUND			-9999
@@ -70,6 +71,9 @@
 #define CMD_END_STR					"End\n"
 
 #define BUFSZ						4096
+
+#define IMG_FILE_PATH			"screenshot.png"
+#define IMG_FILE_WAIT_TIME		5000
 
 /* ==================================================================== */
 /* ENUMS																*/
@@ -84,6 +88,7 @@ typedef enum {
 /* VARIABLES															*/
 /* ==================================================================== */
 static int g_http_mode = 1;
+static int sock_data_sz = 0;
 
 /* ==================================================================== */
 /* STRUCTS															  */
@@ -93,6 +98,7 @@ typedef struct cmd_info
 {
 	int (*fun)(struct cmd_info *info, int sock);
 	const char *cmd;
+	const char *param;
 } CmdInfo_t;
 
 
@@ -103,21 +109,20 @@ typedef struct cmd_info
 int readc(int sock, char *c)
 {
 	static int p = 0;
-	static int sz = 0;
-	static char buf[BUFSZ];
+	static char buf[BUFSZ + 1];
 
-	if (p >= sz) {
+	if (p >= sock_data_sz) {
 		p = 0;
-		sz = read(sock, buf, sizeof(buf));
+		sock_data_sz = read(sock, buf, sizeof(buf));
 		usleep(WAIT_AFTER_READ);
-		if (sz == 0 && errno == 0) {
+		if (sock_data_sz == 0 && errno == 0) {
 			InfPrint("remote peer exited\n");
 			return -1;
-		} else if (sz <= 0) {
+		} else if (sock_data_sz <= 0) {
 			ErrPrint("read failed:%s\n", strerror(errno));
 			return -2;
 		}
-		buf[sz] = 0;
+		buf[sock_data_sz] = 0;
 //		DbgPrint("read:%s\n", buf);
 	}
 
@@ -174,7 +179,7 @@ static const char *httpd_get_header_date(void)
 	return buf;;
 }
 
-int wait_cmd_http(int sock, char *cmd, int sz)
+int wait_cmd(int sock, char *cmd, int sz)
 {
 	int i;
 	char key[4] = { 0 };
@@ -182,7 +187,11 @@ int wait_cmd_http(int sock, char *cmd, int sz)
 	char *pcmd;
 
 	FunPrint("Start\n");
+#if 1
 	strcpy(cmd, "http_");
+#else
+	memset(cmd, 0 sz);
+#endif
 	pcmd = cmd + strlen(cmd);
 
 start_read:
@@ -221,8 +230,9 @@ start_read:
 	}
 
 	if (i == 0) {
-		ErrPrint("command len = 0\n");
-		return -4;
+		InfPrint("index.html\n");
+		strcpy(pcmd, "index");
+		return 0;
 	} else if (i >= CMD_MAX_LEN) {
 		ErrPrint("command len = %d too long\n", CMD_MAX_LEN);
 		return -5;
@@ -233,64 +243,9 @@ start_read:
 	return 0;
 }
 
-int wait_cmd(int sock, char *cmd, int sz)
-{
-	char c;
-	int i;
-
-	FunPrint("Start\n");
-	if (sz <= CMD_MAX_LEN) {
-		ErrPrint("command buffer too small\n");
-		return -5;
-	}
-
-	if (g_http_mode) {
-		return wait_cmd_http(sock, cmd, sz);
-	}
-
-start_read:
-	/* find start char */
-	while (1) {
-		if (readc(sock, &c) < 0) {
-			return -1;
-		}
-
-//		DbgPrint("readc1:%c\n", c);
-		if (c == CMD_START) break;
-	}
-
-	/* wait end char */
-	for (i = 0; i < CMD_MAX_LEN; i++) {
-		if (readc(sock, &c) < 0) {
-			return -2;
-		}
-
-//		DbgPrint("readc2:%c\n", c);
-		if (c == CMD_END) break;
-		if (c == '\n' || c == '\r') goto start_read;
-
-		DbgPrint("after break\n");
-		cmd[i] = c;
-	}
-
-	if (i == 0) {
-		ErrPrint("command len = 0\n");
-		return -3;
-	} else if (i >= CMD_MAX_LEN) {
-		ErrPrint("command len = %d too long\n", CMD_MAX_LEN);
-		return -4;
-	}
-	DbgPrint("cmd len:%d\n", i);
-	cmd[i] = 0;
-
-	return 0;
-}
-
-int write_cmd_result(int sock, const char *cmd, CmdRet_t ret)
+int write_cmd_result_tobuf(char *buf, const char *cmd, CmdRet_t ret)
 {
 	const char *str;
-	char buf[BUFSZ];
-	int n;
 
 	switch (ret)
 	{
@@ -308,7 +263,15 @@ int write_cmd_result(int sock, const char *cmd, CmdRet_t ret)
 			break;
 	}
 
-	n = snprintf(buf, BUFSZ, "Command:%s : %s\n", cmd, str);
+	return snprintf(buf, BUFSZ, "Command:%s : %s\n", cmd, str);
+}
+
+int write_cmd_result(int sock, const char *cmd, CmdRet_t ret)
+{
+	char buf[BUFSZ];
+	int n;
+
+	n = write_cmd_result_tobuf(buf, cmd, ret);
 	ret = write(sock, buf, n);
 
 	if (ret != n) {
@@ -333,11 +296,48 @@ int cmd_update(CmdInfo_t *info, int sock)
 	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
-int cmd_restart(CmdInfo_t *info, int sock)
+void cmd_internal_restart(int n)
 {
+	char cmd_close[PATH_MAX_LEN];
+	char cmd_max[PATH_MAX_LEN];
 
-	system("/mnt/d/bjn/restart_all_vm.exe &");
+	snprintf(cmd_close, PATH_MAX_LEN, "/mnt/d/bjn/close%d.exe", n);
+	snprintf(cmd_max, PATH_MAX_LEN, "/mnt/d/bjn/max%d.exe", n);
 
+	system(cmd_close);
+	sleep(10);
+	system("/mnt/d/bjn/start_all.exe");
+	sleep(50);
+	system(cmd_max);
+	sleep(1);
+	system("/mnt/d/bjn/run.exe");
+	sleep(1);
+	system("/mnt/d/bjn/max_off.exe");
+}
+
+int cmd_restart1(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(1);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_restart2(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(2);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_restart3(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(3);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_restart_all(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(1);
+	cmd_internal_restart(2);
+	cmd_internal_restart(3);
 	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
 
@@ -354,6 +354,111 @@ int cmd_shutdown(CmdInfo_t *info, int sock)
 {
 
 	system("/mnt/c/Windows/System32/shutdown.exe -s -t 0");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_move_mouse(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/move_mouse.exe &");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_close1(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close1.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_close2(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close2.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_close3(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close3.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_max1(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max1.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_max2(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max2.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_max3(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max3.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_max_off(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max_off.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_run(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/run.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_start_all(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/start_all.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_redraw(CmdInfo_t *info, int sock)
+{
+
+	system("./tools/nircmd/nircmd.exe monitor async_on");
+	system("./tools/nircmd/nircmd.exe win hideshow ititle BlueStacks");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_monitor_on(CmdInfo_t *info, int sock)
+{
+
+	system("./tools/nircmd/nircmd.exe monitor async_on");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_monitor_off(CmdInfo_t *info, int sock)
+{
+
+	system("./tools/nircmd/nircmd.exe monitor async_off");
 
 	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
 }
@@ -398,21 +503,46 @@ int http_write_header(int sock, const char *type, long content_length)
 	return n;
 }
 
+static int str_end_with(const char *str, const char *suffix)
+{
+	if (!str || !suffix)
+		return 0;
+	size_t lenstr = strlen(str);
+	size_t lensuffix = strlen(suffix);
+	if (lensuffix >  lenstr)
+		return 0;
+	return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
+}
 
-#define IMG_FILE_PATH			"screenshot.png"
-#define IMG_FILE_WAIT_TIME		5000
-int cmd_http_screenshot(CmdInfo_t *info, int sock)
+static const char *get_http_type(const char *path)
+{
+	int i;
+	struct ext_type {
+		const char *ext;
+		const char *type;
+	} tbl[] = {
+		{ ".png", "image/png" },
+		{ ".html", "text/html" },
+		{ ".htm", "text/html" },
+		{ ".txt", "text/plain" },
+	};
+
+	for (i = 0; i < ARYSIZ(tbl); i++) {
+		if (str_end_with(path, tbl[i].ext))
+			return tbl[i].type;
+	}
+
+	return "text/html";
+}
+
+static int cmd_internal_http_send_file(int sock, const char *path, int tmo)
 {
 	struct stat st;
-	int n, ret, fd, tmo, wrote;
+	int n, ret, fd, wrote;
 	char buf[BUFSZ];
 
-	remove(IMG_FILE_PATH);
-	system("./tools/nircmd/nircmd.exe savescreenshot " IMG_FILE_PATH);
-
-	tmo = IMG_FILE_WAIT_TIME;
 	while (tmo > 0) {
-		if (stat(IMG_FILE_PATH, &st) == 0) {
+		if (stat(path, &st) == 0) {
 			break;
 		}
 
@@ -421,23 +551,23 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 		usleep(1000);
 	}
 	if (tmo <= 0) {
-		ErrPrint("File %s Not found\n", IMG_FILE_PATH);
+		ErrPrint("File %s Not found\n", path);
 		return -1;
 	}
 	//usleep(1000000);
 
 	if ((st.st_mode & S_IFMT) != S_IFREG) {
-		ErrPrint("File %s is not a file\n", IMG_FILE_PATH);
+		ErrPrint("File %s is not a file\n", path);
 		return -2;
 	}
 
-	ret = http_write_header(sock, "image/png", st.st_size);
+	ret = http_write_header(sock, get_http_type(path), st.st_size);
 	if (ret <= 0) {
 		ErrPrint("write header failed, ret:%d\n", ret);
 		return -3;
 	}
 
-	fd = open(IMG_FILE_PATH, O_RDONLY);
+	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		ErrPrint("open() failed: %s\n", strerror(errno));
 		return -4;
@@ -456,6 +586,134 @@ int cmd_http_screenshot(CmdInfo_t *info, int sock)
 	}
 
 	return 0;
+}
+
+int cmd_http_close1(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close1.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_close2(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close2.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_close3(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/close3.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_max1(CmdInfo_t *info, int sock)
+{
+	char buf[BUFSZ];
+	int n;
+
+	n = write_cmd_result_tobuf(buf, info->cmd, eCMD_RES_OK);
+	http_write_header(sock, "text/plain", n);
+
+	return cmd_max1(info, sock);
+}
+
+int cmd_http_max2(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max2.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_max3(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max3.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_max_off(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/max_off.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_run(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/run.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_start_all(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/d/bjn/start_all.exe");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_restart1(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(1);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_restart2(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(2);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_restart3(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(3);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_restart_all(CmdInfo_t *info, int sock)
+{
+	cmd_internal_restart(1);
+	cmd_internal_restart(2);
+	cmd_internal_restart(3);
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_reboot(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/c/Windows/System32/shutdown.exe -f -r -t 0");
+	//system("sudo reboot");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_shutdown(CmdInfo_t *info, int sock)
+{
+
+	system("/mnt/c/Windows/System32/shutdown.exe -s -t 0");
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int cmd_http_screenshot(CmdInfo_t *info, int sock)
+{
+	remove(IMG_FILE_PATH);
+	system("./tools/nircmd/nircmd.exe monitor async_on");
+	system("./tools/nircmd/nircmd.exe win hideshow ititle BlueStacks");
+	system("./tools/nircmd/nircmd.exe savescreenshot " IMG_FILE_PATH);
+
+	return cmd_internal_http_send_file(sock, IMG_FILE_PATH, IMG_FILE_WAIT_TIME);
 }
 
 int cmd_http_disable(CmdInfo_t *info, int sock)
@@ -481,29 +739,99 @@ int cmd_http_disable(CmdInfo_t *info, int sock)
 	return 0;
 }
 
+int cmd_http_index(CmdInfo_t *info, int sock)
+{
+	
+	return cmd_internal_http_send_file(sock, "index.html", 100);
+}
 
+int cmd_help(CmdInfo_t *info, int sock);
 
 struct cmd_info cmd_table[] = 
 {
+	{ cmd_screenshot,		"screenshot" },
+	{ cmd_exec_rec,			"exec_rec" },
+	{ cmd_exec_nir,			"exec_nir" },
+#if 0
+	{ cmd_reboot,			"reboot" },
+	{ cmd_shutdown,			"shutdown" },
+	{ cmd_enableHttp,		"enhttp" },
+
+	{ cmd_close1,			"close1" },
+	{ cmd_close2,			"close2" },
+	{ cmd_close3,			"close3" },
+	{ cmd_max1,				"max1" },
+	{ cmd_max2,				"max2" },
+	{ cmd_max3,				"max3" },
+	{ cmd_max_off,			"max off" },
+	{ cmd_run,				"run" },
+	{ cmd_start_all,		"start all" },
+
+	{ cmd_restart1,			"restart1" },
+	{ cmd_restart2,			"restart2" },
+	{ cmd_restart3,			"restart3" },
+	{ cmd_restart_all,		"restart all" },
+
+	{ cmd_http_screenshot,	"http_screenshot" },
+	{ cmd_http_disable,		"http_disable" },
+	{ cmd_http_index,		"http_index" },
+
+	{ cmd_http_reboot,		"http_reboot" },
+	{ cmd_http_shutdown,	"http_shutdown" },
+
+	{ cmd_http_close1,		"http_close1" },
+	{ cmd_http_close2,		"http_close2" },
+	{ cmd_http_close3,		"http_close3" },
+	{ cmd_http_max1,		"http_max1" },
+	{ cmd_http_max2,		"http_max2" },
+	{ cmd_http_max3,		"http_max3" },
+	{ cmd_http_max_off,		"http_max_off" },
+	{ cmd_http_run,			"http_run" },
+	{ cmd_http_start_all,	"http_start_all" },
+
+	{ cmd_http_restart1,			"http_restart1" },
+	{ cmd_http_restart2,			"http_restart2" },
+	{ cmd_http_restart3,			"http_restart3" },
+	{ cmd_http_restart_all,		"http_restart_all" },
+
+	{ cmd_help,				"http_help" },
+
+	{ cmd_help,				"help" },
+
 	{ cmd_notepad,			"notepad" },
 	{ cmd_test,				"test" },
 	{ cmd_update,			"update" },
-	{ cmd_restart,			"restart" },
-	{ cmd_reboot,			"reboot" },
-	{ cmd_shutdown,			"shutdown" },
-	{ cmd_enableHttp,		"enableHttp" },
-	{ cmd_http_screenshot,	"http_screenshot" },
-	{ cmd_http_disable,		"http_disable" },
-	{ cmd_update,			"http_update" },
-	{ cmd_restart,			"http_restart" },
-	{ cmd_reboot,			"http_reboot" },
-	{ cmd_shutdown,			"http_shutdown" },
+	{ cmd_move_mouse,		"move_mouse" },
+#endif
 };
 
-int execute_cmd(const char *cmd, int sock)
+int cmd_help(CmdInfo_t *info, int sock)
+{
+	int i;
+
+	for (i = 0; i < ARYSIZ(cmd_table); i++) {
+		InfPrint("Cmd %d : %s\n", i, cmd_table[i].cmd);
+	}
+
+	return write_cmd_result(sock, info->cmd, eCMD_RES_OK);
+}
+
+int execute_cmd(const char *arg_cmd, int sock)
 {
 	int i;
 	int ret = CMD_RET_NOT_FOUND;
+	char cmd[CMD_MAX_LEN];
+	const char *param;
+
+	if ((param = strchr(arg_cmd, '/')) == NULL) {
+		strcpy(cmd, arg_cmd);
+	} else {
+		for (i = 0; arg_cmd + i < param; i++) {
+			cmd[i] = arg_cmd[i];
+		}
+		cmd[i] = '\0';
+		param++;
+	}
 
 	for (i = 0; i < ARYSIZ(cmd_table); i++) {
 		if (0 == strncmp(cmd, cmd_table[i].cmd, strlen(cmd_table[i].cmd))) {
@@ -610,6 +938,7 @@ int start_server(unsigned short port)
 		/* TCPセッションの終了 */
 		DbgPrint("close socket\n");
 		close(sock);
+		sock_data_sz = 0;
 	}
 
 end:
