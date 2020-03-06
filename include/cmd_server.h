@@ -7,7 +7,7 @@
 #define ARYSIZ(ary)					(sizeof(ary) / sizeof(ary[0]))
 #define CMD_START					'.'
 #define CMD_END						'.'
-#define CMD_MAX_LEN					16
+#define CMD_MAX_LEN					64
 #define PATH_MAX_LEN				512
 #define PARAM_MAX_SZ				8
 #define CONN_TIMEOUT				(60 * 10)
@@ -22,6 +22,7 @@
 #define BUFSZ						4096
 
 #define IMG_FILE_PATH			"screenshot.png"
+#define CONF_FILE_PATH			"server.conf"
 #define IMG_FILE_WAIT_TIME		5000
 
 /* ==================================================================== */
@@ -37,20 +38,6 @@ typedef enum {
 /* ==================================================================== */
 /* STRUCTS															  */
 /* ==================================================================== */
-
-typedef struct cmd_param
-{
-	const char *params[PARAM_MAX_SZ];
-	int cnt;
-} CmdParam_t;
-
-typedef struct cmd_info
-{
-	int (*fun)(struct cmd_info *info, int sock, CmdParam_t *param);
-	const char *cmd;
-} CmdInfo_t;
-
-
 
 int readc(int sock, char *c);
 const char *httpd_get_header_date(void);
