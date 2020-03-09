@@ -19,7 +19,7 @@
 #define __DEBUGLOG_DEBUG				1
 #define __DEBUGLOG_CONF					1
 #define __DEBUGLOG_FUNC					1
-#define __DEBUGLOG_POS					0
+#define __DEBUGLOG_POS					1
 
 #define MOD_NAME						"CmdSrv"
 #if __DEBUGLOG_ERROR
@@ -72,8 +72,6 @@
 /* ==================================================================== */
 /* VARIABLES															*/
 /* ==================================================================== */
-static int g_http_mode = 1;
-static int sock_data_sz = 0;
 
 /* ==================================================================== */
 /* STRUCTS															  */
@@ -143,7 +141,6 @@ int parse_conf(void)
 	/* Get port */
 	if(!config_lookup_int(&cfg, "port", &port)) {
 		ErrPrint("No 'name' setting in configuration file.\n");
-		config_destroy(&cfg);
 		goto err;
 	}
 	ConfPrint("Port:%d\n", port);
@@ -163,6 +160,7 @@ int parse_conf(void)
 		}
 		memset(gconf.cmds, 0, count * sizeof(struct conf_cmd));
 		ConfPrint("%-40s%-10s\n", "command", "name");
+		ConfPrint("--------------------------------\n");
 		for(i = 0; i < count; ++i)
 		{
 			config_setting_t *e = config_setting_get_elem(setting, i);
@@ -195,13 +193,18 @@ int parse_conf(void)
 			goto err;
 		}
 		memset(gconf.paths, 0, count * sizeof(struct conf_path));
+		ConfPrint("\n");
 		ConfPrint("%-40s%-10s\n", "path", "name");
+		ConfPrint("path count:%d--------------------------------\n", count);
 		for(i = 0; i < count; ++i)
 		{
 			config_setting_t *e = config_setting_get_elem(setting, i);
 
 			const char *path, *name;
-
+			if (!e) {
+				ErrPrint("get element failed, name:%s, i:%d, count:%d\n",
+						"path", i, count);
+			}
 			if((path = config_setting_get_string(e)) == NULL) {
 				ErrPrint("get path in index:%d failed\n", i);
 				continue;
@@ -218,9 +221,14 @@ int parse_conf(void)
 		}
 	}
 
+	ConfPrint("parse done\n");
+
 	ret = 0;
+
 err:
+	PosPrint
 	config_destroy(&cfg);
+	PosPrint
 	return ret;
 }
 
@@ -237,13 +245,27 @@ static char *find_path(const char *name)
 	return NULL;
 }
 
+static char *find_cmd(const char *name)
+{
+	int i;
+
+	for (i = 0; i < gconf.cmd_cnt; i++) {
+		if (strcmp(name, gconf.cmds[i].name) == 0) {
+			return gconf.cmds[i].cmd;
+		}
+	}
+
+	return NULL;
+}
+
 static void replace_named_path(char *cmd, char *out_path)
 {
 	int i;
 	char path_name[CMD_MAX_LEN];
 	char *start, *end, *path;
-	char *p = cmd, out = out_path;
+	char *p = cmd, *out = out_path;
 
+	DbgPrint("cmd:%s\n", cmd);
 	while (start = strchr(p, '[')) {
 		end = strchr(start, ']');
 		if (end) {
@@ -252,6 +274,7 @@ static void replace_named_path(char *cmd, char *out_path)
 			out += i;
 			memset(path_name, 0, CMD_MAX_LEN);
 			memcpy(path_name, start + 1, end - start - 1);
+			DbgPrint("found path name:%s\n", path_name);
 			if ((path = find_path(path_name)) == NULL) {
 				out += sprintf(out, "[%s]", path_name);
 			} else {
@@ -277,12 +300,119 @@ static int run_cmd(const char *cmd)
 	return -1;
 }
 
+/*
+ * same as strchr but return index */
+static int istrchr(const char *str, char c)
+{
+	int i;
+
+	for (i = 0; str[i] != '\0'; i++) {
+		if (str[i] == c)
+			return i;
+	}
+
+	return -1;
+}
+#if 0
+static void write_str_with_buffer(int sock, char *buf, int *pos, const char *str)
+{
+	int i;
+
+	for (i = 0; str[i] != '\0'; i++) {
+		if (*pos + i >= BUFSZ) {
+			write(sock, buf, BUFSZ);
+			*pos = 0;
+		}
+		buf[*pos + i] = str[i];
+	}
+}
+#endif
+
+static int write_str_to_buf(char *buf, const char *str)
+{
+	int i;
+
+	for (i = 0; str[i] != '\0'; i++) {
+		buf[i] = str[i];
+	}
+
+	return i;
+}
+
+#define HTTP_BUFSZ			(1024 * 1024)
+int response_index(int sock)
+{
+	char buf[HTTP_BUFSZ];
+	int pos = 0;
+	char line[BUFSZ];
+	char conv_cmd[BUFSZ];
+	char cmd_name[CMD_MAX_LEN];
+	const char *cmd;
+	char *pline;
+	int start, end, ret;
+	FILE *fp = fopen("index.html", "r");
+
+	if (!fp) {
+		ErrPrint("index.html not found\n");
+		return CMD_RET_NOT_FOUND;
+	}
+
+	while (fgets(line, BUFSZ, fp)) {
+		pline = line;
+		while (1) {
+			start = istrchr(pline, '[');
+			end = istrchr(pline, ']');
+			/* No cmd found: write all line */
+			if (start < 0 || end < 0) {
+				pos += write_str_to_buf(buf + pos, pline);
+				break;
+			}
+
+			/* replace command */
+			memset(cmd_name, 0, CMD_MAX_LEN);
+			memcpy(cmd_name, pline + start + 1, end - start - 1);
+			if ((cmd = find_cmd(cmd_name)) == NULL) {
+				sprintf(conv_cmd,
+						"<font size=\"3\" color=\"red\">"
+						"command %s not found </font>",
+						cmd_name);
+			} else {
+				sprintf(conv_cmd,
+						"<a href=\"%s\" target=\"result\">%s</a>",
+						cmd, cmd_name);
+			}
+
+			pline[start] = '\0';
+			pos += write_str_to_buf(buf + pos, pline);
+			pos += write_str_to_buf(buf + pos, conv_cmd);
+			pline = pline + end + 1;
+		}
+	}
+
+	fclose(fp);
+
+	ret = http_write_header(sock, get_http_type(".html"), pos);
+	if (ret <= 0) {
+		ErrPrint("write header failed, ret:%d, err:%s\n", ret, strerror(errno));
+		return -3;
+	}
+
+	ret = write(sock, buf, pos);
+	if (ret != pos) {
+		ErrPrint("write data failed, n:%d, ret:%d, err:%s\n",
+				pos, ret, strerror(errno));
+		return -5;
+	}
+}
 
 int execute_cmd(const char *cmd, int sock)
 {
 	int i;
 	char path[PATH_MAX_LEN];
 
+	if (strcmp(cmd, "index") == 0) {
+		return response_index(sock);
+	}
 	for (i = 0; i < gconf.cmd_cnt; i++) {
 		if (0 == strncmp(cmd, gconf.cmds[i].name, CMD_MAX_LEN)) {
 			break;
@@ -299,8 +429,7 @@ int execute_cmd(const char *cmd, int sock)
 		ErrPrint("File access failed, name:%s, path:%s\n", gconf.cmds[i].name, path);
 		return CMD_RET_NOT_FOUND;
 	}
-	return (path);
-	return ret;
+	return run_cmd(path);
 }
 
 int wait_connect(int fd)
@@ -332,6 +461,70 @@ int wait_connect(int fd)
 	InfPrint("remote IP:%s Port:%d\n", ip_str, ntohs(client.sin_port));
 
 	return ret;
+}
+
+int wait_cmd(int sock, char *cmd, int sz)
+{
+	int i;
+	char key[4] = { 0 };
+	char c;
+	char *pcmd;
+
+	FunPrint("Start\n");
+#if 0
+	strcpy(cmd, "http_");
+#else
+	memset(cmd, 0, sz);
+#endif
+	pcmd = cmd + strlen(cmd);
+
+start_read:
+	/* find GET */
+	while (1) {
+		if (readc(sock, &key[2]) < 0) {
+			return -1;
+		}
+
+		if (strncmp(key, "GET", 3) == 0) break;
+		key[0] = key[1];
+		key[1] = key[2];
+	}
+
+	DbgPrint("########################################## Got GET\n");
+	/* find / */
+	while (1) {
+		if (readc(sock, &c) < 0) {
+			return -2;
+		}
+
+		if (c == '/') break;
+		if (c != ' ') goto start_read;
+	}
+
+	/* get command */
+	for (i = 0; i < CMD_MAX_LEN; i++) {
+		if (readc(sock, &c) < 0) {
+			return -3;
+		}
+
+		DbgPrint("get cmd c:%c\n", c);
+		if (c == ' ') break;
+		if (c == '\n' || c == '\r') goto start_read;
+		pcmd[i] = c;
+	}
+
+	if (i == 0) {
+		InfPrint("index.html\n");
+		strcpy(pcmd, "index");
+		return 0;
+	} else if (i >= CMD_MAX_LEN) {
+		ErrPrint("command len = %d too long\n", CMD_MAX_LEN);
+		return -5;
+	}
+	pcmd[i] = 0;
+	DbgPrint("cmd len:%d, cmd:%s, pcmd:%s\n", i, cmd, pcmd);
+
+	return 0;
 }
 
 int start_server(unsigned short port)
@@ -381,24 +574,14 @@ int start_server(unsigned short port)
 			goto end;
 		}
 
-		while (wait_cmd(sock, cmd, sizeof(cmd)) == 0)
-		{
-			ret = execute_cmd(cmd);
-			if (ret == CMD_RET_NOT_FOUND) {
-				sprintf(result, "Command \"%s\" Not Found", cmd);
-				write(sock, result, strlen(result));
-			} else if (ret == CMD_RET_HTTP_OK) {
-				DbgPrint("result:%s\n", result);
-			}
+		if (wait_cmd(sock, cmd, sizeof(cmd)) == 0) {
+			ret = execute_cmd(cmd, sock);
 			InfPrint("execute cmd:%s, return:%d\n", cmd, ret);
-			break;
 		}
 
-		write(sock, CMD_END_STR, strlen(CMD_END_STR));
-		/* TCPセッションの終了 */
 		DbgPrint("close socket\n");
 		close(sock);
-		sock_data_sz = 0;
+		reset_sock_buf();
 	}
 
 end:
@@ -442,11 +625,12 @@ int main(int argc, const char* argv[])
 		exit(4);
 	}
 
+#if 0
 	while (1)
 	{
 		start_server(port);
 	}
-
+#endif
 
 	return 0;
 }

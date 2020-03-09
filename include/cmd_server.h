@@ -39,8 +39,9 @@ typedef enum {
 /* STRUCTS															  */
 /* ==================================================================== */
 
+void reset_sock_buf(void);
 int readc(int sock, char *c);
-const char *httpd_get_header_date(void);
+const char *get_http_type(const char *path);
 int write_cmd_result_tobuf(char *buf, const char *cmd, CmdRet_t ret);
 int write_cmd_result(int sock, const char *cmd, CmdRet_t ret);
 int http_write_header(int sock, const char *type, long content_length);

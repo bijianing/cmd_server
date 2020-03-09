@@ -53,6 +53,12 @@
 #endif
 
 /* ==================================================================== */
+/* VARIABLES															*/
+/* ==================================================================== */
+static int sock_data_sz = 0;
+
+
+/* ==================================================================== */
 /* FUNCTIONS															*/
 /* ==================================================================== */
 int readc(int sock, char *c)
@@ -79,6 +85,11 @@ int readc(int sock, char *c)
 //	DbgPrint("readc internal:%c\n", *c);
 
 	return 0;
+}
+
+void reset_sock_buf(void)
+{
+	sock_data_sz = 0;
 }
 
 static const char *httpd_get_header_date(void)
@@ -202,7 +213,7 @@ static int str_end_with(const char *str, const char *suffix)
 	return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
 }
 
-static const char *get_http_type(const char *path)
+const char *get_http_type(const char *path)
 {
 	int i;
 	struct ext_type {
