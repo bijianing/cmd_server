@@ -14,12 +14,12 @@
 #include <libconfig.h>
 #include <cmd_server.h>
 
-#define __DEBUGLOG_ERROR				1
-#define __DEBUGLOG_INFO					1
-#define __DEBUGLOG_DEBUG				1
+#define __DEBUGLOG_ERROR				0
+#define __DEBUGLOG_INFO					0
+#define __DEBUGLOG_DEBUG				0
 #define __DEBUGLOG_CONF					1
-#define __DEBUGLOG_FUNC					1
-#define __DEBUGLOG_POS					1
+#define __DEBUGLOG_FUNC					0
+#define __DEBUGLOG_POS					0
 
 #define MOD_NAME						"CmdSrv"
 #if __DEBUGLOG_ERROR
@@ -145,41 +145,7 @@ int parse_conf(void)
 	}
 	ConfPrint("Port:%d\n", port);
 	gconf.port = (unsigned short)port;
-
-	/* Get commands */
-	setting = config_lookup(&cfg, "cmd");
-	if(setting == NULL) {
-		ErrPrint("No cmds in conf\n");
-	} else {
-		int count = config_setting_length(setting);
-		int i;
-
-		if ((gconf.cmds = malloc(count * sizeof(struct conf_cmd))) == NULL) {
-			ErrPrint("cmds alloc failed\n");
-			goto err;
-		}
-		memset(gconf.cmds, 0, count * sizeof(struct conf_cmd));
-		ConfPrint("%-40s%-10s\n", "command", "name");
-		ConfPrint("--------------------------------\n");
-		for(i = 0; i < count; ++i)
-		{
-			config_setting_t *e = config_setting_get_elem(setting, i);
-
-			/* Only output the record if all of the expected fields are present. */
-			const char *command, *name, *html;
-
-			if(!(config_setting_lookup_string(e, "command", &command)
-					&& config_setting_lookup_string(e, "name", &name))) {
-				ErrPrint("get cmd in index:%d failed\n", i);
-				continue;
-			}
-			ConfPrint("%-40s%-10s\n", command, name);
-			strncpy(gconf.cmds[gconf.cmd_cnt].cmd, command, PATH_MAX_LEN);
-			strncpy(gconf.cmds[gconf.cmd_cnt].name, name, CMD_MAX_LEN);
-			gconf.cmd_cnt++;
-		}
-	}
-
+#if 1
 	/* Get paths */
 	setting = config_lookup(&cfg, "path");
 	if(setting == NULL) {
@@ -220,7 +186,41 @@ int parse_conf(void)
 			gconf.path_cnt++;
 		}
 	}
+#endif
 
+	/* Get commands */
+	setting = config_lookup(&cfg, "cmd");
+	if(setting == NULL) {
+		ErrPrint("No cmds in conf\n");
+	} else {
+		int count = config_setting_length(setting);
+		int i;
+
+		if ((gconf.cmds = malloc(count * sizeof(struct conf_cmd))) == NULL) {
+			ErrPrint("cmds alloc failed\n");
+			goto err;
+		}
+		memset(gconf.cmds, 0, count * sizeof(struct conf_cmd));
+		ConfPrint("%-40s%-10s\n", "command", "name");
+		ConfPrint("--------------------------------\n");
+		for(i = 0; i < count; ++i)
+		{
+			config_setting_t *e = config_setting_get_elem(setting, i);
+
+			/* Only output the record if all of the expected fields are present. */
+			const char *command, *name, *html;
+
+			if(!(config_setting_lookup_string(e, "command", &command)
+					&& config_setting_lookup_string(e, "name", &name))) {
+				ErrPrint("get cmd in index:%d failed\n", i);
+				continue;
+			}
+			ConfPrint("%-40s%-10s\n", command, name);
+			strncpy(gconf.cmds[gconf.cmd_cnt].cmd, command, PATH_MAX_LEN);
+			strncpy(gconf.cmds[gconf.cmd_cnt].name, name, CMD_MAX_LEN);
+			gconf.cmd_cnt++;
+		}
+	}
 	ConfPrint("parse done\n");
 
 	ret = 0;
