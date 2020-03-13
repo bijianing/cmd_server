@@ -14,12 +14,12 @@
 #include <libconfig.h>
 #include <cmd_server.h>
 
-#define __DEBUGLOG_ERROR				0
-#define __DEBUGLOG_INFO					0
-#define __DEBUGLOG_DEBUG				0
+#define __DEBUGLOG_ERROR				1
+#define __DEBUGLOG_INFO					1
+#define __DEBUGLOG_DEBUG				1
 #define __DEBUGLOG_CONF					1
-#define __DEBUGLOG_FUNC					0
-#define __DEBUGLOG_POS					0
+#define __DEBUGLOG_FUNC					1
+#define __DEBUGLOG_POS					1
 
 #define MOD_NAME						"CmdSrv"
 #if __DEBUGLOG_ERROR
@@ -180,9 +180,10 @@ int parse_conf(void)
 				ErrPrint("get path name in index:%d failed\n", i);
 				continue;
 			}
-			ConfPrint("%-40s%-10s\n", path, name);
-			strncpy(gconf.paths[gconf.cmd_cnt].path, path, PATH_MAX_LEN);
-			strncpy(gconf.paths[gconf.cmd_cnt].name, name, CMD_MAX_LEN);
+			strncpy(gconf.paths[gconf.path_cnt].path, path, PATH_MAX_LEN);
+			strncpy(gconf.paths[gconf.path_cnt].name, name, CMD_MAX_LEN);
+			ConfPrint("%-40s%-10s\n", gconf.paths[gconf.path_cnt].path,
+					gconf.paths[gconf.path_cnt].name);
 			gconf.path_cnt++;
 		}
 	}
@@ -237,6 +238,7 @@ static char *find_path(const char *name)
 	int i;
 
 	for (i = 0; i < gconf.path_cnt; i++) {
+		DbgPrint("name:%s, gconf.paths[%d].name:%s\n", name, i, gconf.paths[i].name);
 		if (strcmp(name, gconf.paths[i].name) == 0) {
 			return gconf.paths[i].path;
 		}
@@ -258,26 +260,41 @@ static char *find_cmd(const char *name)
 	return NULL;
 }
 
-static void replace_named_path(char *cmd, char *out_path)
+/*
+ * same as strchr but return index */
+static int istrchr(const char *str, char c)
 {
 	int i;
+
+	for (i = 0; str[i] != '\0'; i++) {
+		DbgPrint("str[%d]:%c\n", i, str[i]);
+		if (str[i] == c)
+			return i;
+	}
+
+	return -1;
+}
+
+static void replace_named_path(const char *cmd, char *out_path)
+{
+	int i, start, end;
 	char path_name[CMD_MAX_LEN];
-	char *start, *end, *path;
-	char *p = cmd, *out = out_path;
+	char *path, *out = out_path;
+	const char *p = cmd;
 
 	DbgPrint("cmd:%s\n", cmd);
-	while (start = strchr(p, '[')) {
-		end = strchr(start, ']');
+	while ((start = istrchr(p, '[')) >= 0) {
+		end = istrchr(p + start, ']');
 		if (end) {
-			for (i = 0; p + i != start; i++)
-				out[i] = p[i];
-			out += i;
+			memcpy(out, p, start);
+			out += start;
 			memset(path_name, 0, CMD_MAX_LEN);
-			memcpy(path_name, start + 1, end - start - 1);
-			DbgPrint("found path name:%s\n", path_name);
+			memcpy(path_name, p + start + 1, end - start - 1);
 			if ((path = find_path(path_name)) == NULL) {
+				DbgPrint("not found path:%s\n", path_name);
 				out += sprintf(out, "[%s]", path_name);
 			} else {
+				DbgPrint("found path name:%s, path:%s \n", path_name, path);
 				out += sprintf(out, "%s", path);
 			}
 			p += (end - start + 1);
@@ -286,6 +303,7 @@ static void replace_named_path(char *cmd, char *out_path)
 		}
 	}
 	strcpy(out, p);
+	DbgPrint("end, out:%s\n", out);
 }
 
 static int run_cmd(const char *cmd)
@@ -295,20 +313,6 @@ static int run_cmd(const char *cmd)
 	status = system(cmd);
 	if (WIFEXITED(status)) {
 		return WEXITSTATUS(status);
-	}
-
-	return -1;
-}
-
-/*
- * same as strchr but return index */
-static int istrchr(const char *str, char c)
-{
-	int i;
-
-	for (i = 0; str[i] != '\0'; i++) {
-		if (str[i] == c)
-			return i;
 	}
 
 	return -1;
@@ -378,8 +382,8 @@ int response_index(int sock)
 						cmd_name);
 			} else {
 				sprintf(conv_cmd,
-						"<a href=\"%s\" target=\"result\">%s</a>",
-						cmd, cmd_name);
+						"<a href=\"%s%s\" target=\"result\">%s</a>",
+						CMD_PREFIX, cmd, cmd_name);
 			}
 
 			pline[start] = '\0';
@@ -413,7 +417,9 @@ int execute_cmd(const char *cmd, int sock)
 	if (strcmp(cmd, "index") == 0) {
 		return response_index(sock);
 	}
+#if 0
 	for (i = 0; i < gconf.cmd_cnt; i++) {
+		DbgPrint("cmd:%s, cmd name[%d]:%s\n", cmd, i, gconf.cmds[i].name);
 		if (0 == strncmp(cmd, gconf.cmds[i].name, CMD_MAX_LEN)) {
 			break;
 		}
@@ -423,8 +429,11 @@ int execute_cmd(const char *cmd, int sock)
 		ErrPrint("Command not found, name:%s\n", gconf.cmds[i].name);
 		return CMD_RET_NOT_FOUND;
 	}
+	DbgPrint("cmd name:%s, path:%s\n", gconf.cmds[i].name, path);
+#endif
 
-	replace_named_path(gconf.cmds[i].name, path);
+	replace_named_path(cmd, path);
+	DbgPrint("cmd:%s, path:%s\n", cmd, path);
 	if (access(path, X_OK) < 0) {
 		ErrPrint("File access failed, name:%s, path:%s\n", gconf.cmds[i].name, path);
 		return CMD_RET_NOT_FOUND;
@@ -468,15 +477,9 @@ int wait_cmd(int sock, char *cmd, int sz)
 	int i;
 	char key[4] = { 0 };
 	char c;
-	char *pcmd;
+	char cmdbuf[PATH_MAX_LEN];
 
 	FunPrint("Start\n");
-#if 0
-	strcpy(cmd, "http_");
-#else
-	memset(cmd, 0, sz);
-#endif
-	pcmd = cmd + strlen(cmd);
 
 start_read:
 	/* find GET */
@@ -510,19 +513,25 @@ start_read:
 		DbgPrint("get cmd c:%c\n", c);
 		if (c == ' ') break;
 		if (c == '\n' || c == '\r') goto start_read;
-		pcmd[i] = c;
+		cmdbuf[i] = c;
 	}
 
 	if (i == 0) {
 		InfPrint("index.html\n");
-		strcpy(pcmd, "index");
+		strcpy(cmd, "index");
 		return 0;
 	} else if (i >= CMD_MAX_LEN) {
 		ErrPrint("command len = %d too long\n", CMD_MAX_LEN);
 		return -5;
 	}
-	pcmd[i] = 0;
-	DbgPrint("cmd len:%d, cmd:%s, pcmd:%s\n", i, cmd, pcmd);
+	cmdbuf[i] = 0;
+	if (memcmp(cmdbuf, CMD_PREFIX, strlen(CMD_PREFIX)) == 0) {
+		strcpy(cmd, cmdbuf + strlen(CMD_PREFIX));
+	} else {
+		ErrPrint("command prefix not match, cmd:%s\n", cmdbuf);
+		return -5;
+	}
+	DbgPrint("cmd len:%d, cmd:%s, cmdbuf:%s\n", i, cmd, cmdbuf);
 
 	return 0;
 }
@@ -625,12 +634,10 @@ int main(int argc, const char* argv[])
 		exit(4);
 	}
 
-#if 0
 	while (1)
 	{
 		start_server(port);
 	}
-#endif
 
 	return 0;
 }

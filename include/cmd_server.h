@@ -18,6 +18,7 @@
 #define CMD_RET_STR_NOT_FOUND		"Not found!\n"
 #define CMD_RET_STR_UNKNOW			"Unknow!\n"
 #define CMD_END_STR					"End\n"
+#define CMD_PREFIX					"cmd/"
 
 #define BUFSZ						4096
 
